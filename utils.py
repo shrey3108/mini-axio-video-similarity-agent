@@ -12,8 +12,6 @@ import yt_dlp
 from sklearn.metrics.pairwise import cosine_similarity
 import torch
 from transformers import CLIPProcessor, CLIPModel
-import speech_recognition as sr
-from pydub import AudioSegment
 
 
 class VideoProcessor:
@@ -32,7 +30,7 @@ class VideoProcessor:
             
             # Download video with timeout and retries
             ydl_opts = {
-                'format': 'bestvideo[ext=mp4]/best[ext=mp4]/best',
+                'format': 'worst[ext=mp4]',
                 'outtmpl': os.path.join(self.temp_dir, '%(id)s.%(ext)s'),
                 'quiet': True,
                 'no_warnings': True,
@@ -90,40 +88,6 @@ class VideoProcessor:
         except Exception as e:
             print(f"Video download error: {e}")
             raise Exception(f"Failed to download video from YouTube. This may be due to network restrictions or YouTube rate limiting. Error: {str(e)}")
-        
-        # Download audio separately in WAV format (for librosa)
-        audio_path = os.path.join(self.temp_dir, f'{video_id}_audio.wav')
-        audio_opts = {
-            'format': 'bestaudio/best',
-            'outtmpl': os.path.join(self.temp_dir, f'{video_id}_temp.%(ext)s'),
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'wav',
-            }],
-            'quiet': True,
-            'no_warnings': True,
-        }
-        
-        with yt_dlp.YoutubeDL(audio_opts) as ydl:
-            ydl.download([url])
-        
-        # yt-dlp saves as {video_id}_temp.wav after conversion
-        temp_audio = os.path.join(self.temp_dir, f'{video_id}_temp.wav')
-        if os.path.exists(temp_audio):
-            os.rename(temp_audio, audio_path)
-        
-        # Validate audio file exists and is not empty
-        if not os.path.exists(audio_path) or os.path.getsize(audio_path) < 1000:
-            print(f"Warning: Audio file empty or missing, using fallback")
-            # Create dummy audio file to prevent crash
-            import wave
-            with wave.open(audio_path, 'w') as wav_file:
-                wav_file.setnchannels(1)
-                wav_file.setsampwidth(2)
-                wav_file.setframerate(22050)
-                wav_file.writeframes(b'\x00' * 22050)
-            
-        return video_path, audio_path, title, video_id
     
     def extract_keyframes(self, video_path: str, num_frames: int = 4) -> List[np.ndarray]:
         """Extract uniformly sampled keyframes from video"""
@@ -176,37 +140,6 @@ class VideoProcessor:
         except Exception as e:
             print(f"Audio extraction error: {e}")
             return np.zeros(13)
-    
-    def extract_speech_text(self, audio_path: str) -> str:
-        """Extract speech text from audio for semantic comparison"""
-        try:
-            if not os.path.exists(audio_path):
-                return ""
-            
-            # Use speech recognition
-            recognizer = sr.Recognizer()
-            
-            # Convert to proper format if needed
-            audio = AudioSegment.from_file(audio_path)
-            audio = audio[:30000]  # First 30 seconds
-            
-            # Export to temp wav for recognition
-            temp_wav = audio_path.replace('.wav', '_temp.wav')
-            audio.export(temp_wav, format='wav')
-            
-            with sr.AudioFile(temp_wav) as source:
-                audio_data = recognizer.record(source, duration=30)
-                # Use Google's free speech recognition
-                text = recognizer.recognize_google(audio_data)
-                
-            # Cleanup temp file
-            if os.path.exists(temp_wav):
-                os.remove(temp_wav)
-            
-            return text.lower()
-        except Exception as e:
-            print(f"Speech recognition: {e}")
-            return ""
     
     def get_visual_embeddings(self, frames: List[np.ndarray]) -> np.ndarray:
         """Generate CLIP embeddings for frames"""
@@ -332,22 +265,6 @@ class SimilarityDetector:
         similarity = cosine_similarity(embed1, embed2)[0][0]
         return float(similarity)
     
-    def compute_text_similarity(self, text1: str, text2: str) -> float:
-        """Compute text similarity using word overlap"""
-        if not text1 or not text2:
-            return 0.0
-        
-        words1 = set(text1.lower().split())
-        words2 = set(text2.lower().split())
-        
-        if len(words1) == 0 or len(words2) == 0:
-            return 0.0
-        
-        intersection = len(words1.intersection(words2))
-        union = len(words1.union(words2))
-        
-        return intersection / union if union > 0 else 0.0
-    
     def _generate_mock_results(self, source_url: str) -> List[Dict]:
         """Generate demo results when video download fails (deployment mode)"""
         print("Generating demo results...")
@@ -400,11 +317,6 @@ class SimilarityDetector:
         print("Extracting audio fingerprint...")
         source_audio = self.processor.extract_audio_fingerprint(source_audio_path)
         
-        # Skip speech recognition for speed (uncomment if needed)
-        # print("Extracting speech content...")
-        # source_speech = self.processor.extract_speech_text(source_audio_path)
-        source_speech = ""
-        
         print("Generating visual embeddings...")
         source_visual = self.processor.get_visual_embeddings(source_frames)
         
@@ -424,18 +336,10 @@ class SimilarityDetector:
                     cand_video_path, cand_audio_path, cand_title, _ = self.processor.download_video(candidate['url'])
                     cand_frames = self.processor.extract_keyframes(cand_video_path)
                     cand_audio = self.processor.extract_audio_fingerprint(cand_audio_path)
-                    cand_speech = ""  # Skip speech for speed
                     cand_visual = self.processor.get_visual_embeddings(cand_frames)
                     
                     visual_sim = self.compute_similarity(source_visual, cand_visual)
                     audio_sim = self.compute_similarity(source_audio, cand_audio)
-                    
-                    # Add speech similarity
-                    speech_sim = self.compute_text_similarity(source_speech, cand_speech)
-                    
-                    # Boost audio similarity if speech matches
-                    if speech_sim > 0.3:
-                        audio_sim = max(audio_sim, speech_sim * 0.8)
                     
                     if os.path.exists(cand_video_path):
                         os.remove(cand_video_path)
@@ -479,5 +383,6 @@ class SimilarityDetector:
             os.remove(source_audio_path)
         
         results.sort(key=lambda x: x['similarity'], reverse=True)
+        
         
         return results
