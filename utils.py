@@ -32,7 +32,7 @@ class VideoProcessor:
             
             # Download video with timeout and retries
             ydl_opts = {
-                'format': 'worst[ext=mp4]',
+                'format': 'bestvideo[ext=mp4]/best[ext=mp4]/best',
                 'outtmpl': os.path.join(self.temp_dir, '%(id)s.%(ext)s'),
                 'quiet': True,
                 'no_warnings': True,
