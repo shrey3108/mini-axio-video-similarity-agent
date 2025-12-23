@@ -46,12 +46,10 @@ streamlit run app.py
 - `utils.py` - All processing logic (video, audio, embeddings, similarity)
 - `requirements.txt` - Python dependencies
 
-## Optional: YouTube API Key
-
-For real YouTube search, add your API key in the sidebar. Without it, the app uses mock data for demonstration.
 
 ## Notes
 
 - First run will download CLIP model (~350MB)
 - Processing time depends on video length
 - Uses lower quality video for faster processing
+
