@@ -1,0 +1,13 @@
+streamlit
+yt-dlp
+opencv-python
+numpy
+librosa
+scikit-learn
+torch
+transformers
+safetensors
+google-api-python-client
+pandas
+SpeechRecognition
+pydub
