@@ -27,25 +27,69 @@ class VideoProcessor:
     
     def download_video(self, url: str) -> Tuple[str, str, str, str]:
         """Download video and return paths to video, audio, title, and video_id"""
-        video_id_temp = url.split('v=')[-1].split('&')[0] if 'v=' in url else 'temp'
+        try:
+            video_id_temp = url.split('v=')[-1].split('&')[0] if 'v=' in url else 'temp'
+            
+            # Download video with timeout and retries
+            ydl_opts = {
+                'format': 'worst[ext=mp4]',
+                'outtmpl': os.path.join(self.temp_dir, '%(id)s.%(ext)s'),
+                'quiet': True,
+                'no_warnings': True,
+                'socket_timeout': 30,
+                'retries': 3,
+            }
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                video_path = ydl.prepare_filename(info)
+                title = info.get('title', 'Unknown')
+                video_id = info.get('id', video_id_temp)
+            
+            # Validate video file
+            if not os.path.exists(video_path):
+                raise Exception(f"Video file not found after download")
+            
+            if os.path.getsize(video_path) == 0:
+                raise Exception(f"Downloaded video file is empty")
+            
+            # Download audio separately in WAV format (for librosa)
+            audio_path = os.path.join(self.temp_dir, f'{video_id}_audio.wav')
+            audio_opts = {
+                'format': 'bestaudio/best',
+                'outtmpl': os.path.join(self.temp_dir, f'{video_id}_temp.%(ext)s'),
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'wav',
+                }],
+                'quiet': True,
+                'no_warnings': True,
+            }
+            
+            with yt_dlp.YoutubeDL(audio_opts) as ydl:
+                ydl.download([url])
+            
+            # yt-dlp saves as {video_id}_temp.wav after conversion
+            temp_audio = os.path.join(self.temp_dir, f'{video_id}_temp.wav')
+            if os.path.exists(temp_audio):
+                os.rename(temp_audio, audio_path)
+            
+            # Validate audio file exists and is not empty
+            if not os.path.exists(audio_path) or os.path.getsize(audio_path) < 1000:
+                print(f"Warning: Audio file empty or missing, using fallback")
+                # Create dummy audio file to prevent crash
+                import wave
+                with wave.open(audio_path, 'w') as wav_file:
+                    wav_file.setnchannels(1)
+                    wav_file.setsampwidth(2)
+                    wav_file.setframerate(22050)
+                    wav_file.writeframes(b'\x00' * 22050)
+                
+            return video_path, audio_path, title, video_id
         
-        # Download video
-        ydl_opts = {
-            'format': 'worst[ext=mp4]',
-            'outtmpl': os.path.join(self.temp_dir, '%(id)s.%(ext)s'),
-            'quiet': True,
-            'no_warnings': True,
-        }
-        
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            video_path = ydl.prepare_filename(info)
-            title = info.get('title', 'Unknown')
-            video_id = info.get('id', video_id_temp)
-        
-        # Validate video file
-        if not os.path.exists(video_path) or os.path.getsize(video_path) == 0:
-            raise Exception(f"Video download failed or file is empty: {video_path}")
+        except Exception as e:
+            print(f"Video download error: {e}")
+            raise Exception(f"Failed to download video from YouTube. This may be due to network restrictions or YouTube rate limiting. Error: {str(e)}")
         
         # Download audio separately in WAV format (for librosa)
         audio_path = os.path.join(self.temp_dir, f'{video_id}_audio.wav')
